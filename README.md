@@ -28,3 +28,4 @@ $ python run.py
 
 4) DELETE
 - http://localhost:5000/api/v1/users/<'PASS ID HERE'>.json : For deleting the user by passing their particular id.
+ 
