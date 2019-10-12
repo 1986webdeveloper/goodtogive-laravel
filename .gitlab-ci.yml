@@ -1,0 +1,17 @@
+stages:
+ - deploy
+ 
+pages:
+ stage: deploy
+ script:
+ - if [ -z "$webroot" ]; then echo "Need to set webroot" && exit 1; fi
+ - sudo rsync -rv ./ $webroot --exclude '.git' --exclude '.gitlab-ci.yml' --exclude '.gitignore' --exclude '.env' --exclude 'config/database.php' --exclude 'config/app.php' --exclude 'bootstrap/cache/config.php' --exclude 'storage' --delete
+ - sudo chown root:root $webroot -R
+ - sudo chmod -R 777 $webroot
+ - cd $webroot
+ - composer install
+ - rm -f public/storage
+ - php artisan storage:link
+ - php artisan config:cache
+ only:
+ - master

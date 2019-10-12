@@ -1,0 +1,1346 @@
+<?php
+/**
+ * An ApiController Class 
+ *
+ * The controller class is using to controll all Api.
+ *
+ * @package    Good To Give
+ * @subpackage Common
+ * @author     Acquaint Soft Developer 
+ */
+namespace App\Http\Controllers;
+
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Http\Request;
+use JWTFactory;
+use JWTAuth;
+use App\User;
+use Mail;
+use QrCode;
+use Tymon\JWTAuth\Exceptions\JWTException;
+use App\Http\Controllers\GeneralController AS General;
+use App\Http\Requests\UserApiRequest;
+use App\Http\Requests\RegisterApiRequest;
+use App\Http\Requests\UpdateProfileApiRequest;
+use App\Http\Requests\ChangePasswordRequest;
+use App\Http\Requests\DeleteNotificationApiRequest;
+use App\Http\Requests\UserIdApiRequest;
+use App\Http\Requests\ProjectDetailApiRequest;
+use App\Http\Requests\ScriptureEditApiRequest;
+use App\Http\Requests\NextEventApiRequest;
+use App\Http\Requests\QrCodeVerificationApiRequest;
+use App\Http\Requests\ChurchDetailApiRequest;
+use App\Http\Requests\AddTaskApiRequest;
+use App\Http\Requests\DeleteTaskApiRequest;
+use App\Http\Requests\AddEventApiRequest;
+use App\Http\Requests\DeleteEventApiRequest;
+use App\Http\Requests\AddFundApiRequest;
+use App\Http\Requests\DeleteFundApiRequest;
+use App\Http\Requests\AddProjectApiRequest;
+use App\Http\Requests\UserListApiRequest;
+use App\Http\Requests\AddUserRequest;
+use App\Http\Requests\ForgetPasswordRequest;
+use App\Http\Requests\ShowScriptureApiRequest;
+use App\Http\Requests\ProjectDonationslabsApiRequest;
+use App\Http\Requests\NextEventListApiRequest;
+use App\Http\Requests\FundNameListApiRequest;
+use App\Http\Requests\EditFundApiRequest;
+use App\Http\Requests\EditProjectApiRequest;
+use App\Http\Requests\EditUserApiRequest;
+use App\Http\Requests\UpdateSettingApiRequest;
+use App\Http\Requests\EditTaskApiRequest;
+
+class ApiController extends Controller
+{
+    /**
+     * Determine church and donor login based on user roles .
+     *
+     * @param  \App\Http\Requests\UserApiRequest  $request
+     * @return Response
+     */
+    public function login(UserApiRequest $request){
+        $input = $request->all();
+        if($request->has('device_type'))
+            $device_type = $input['device_type'];
+        else
+            $device_type = '';
+        
+        if($request->has('device_token'))
+            $device_token = $input['device_token'];
+        else
+            $device_token = '';
+
+        $email  = $input['email'];
+        $password  = $input['password'];
+        $userDetailObj  = new \App\User;
+        $user  = $userDetailObj->user_login_check($input['email'],$input['user_role_id']);
+        if($user){
+            $user->update(['device_type' => $device_type, 'device_token' => $device_token]);
+            if($user->status != 'active'){
+                $message = 'User does not active.';
+                $jsonResponse =  General::jsonResponse(0,$message); 
+            }
+        }
+        if ($user) {
+            if(Hash::check($password , $user->password))
+            {
+                $token = JWTAuth::fromUser($user);
+                $message = 'Login successfully.';
+                $user->image =  General::get_file_src($user->image);
+                if($user->user_role_id != 3){
+                    $userChurch = $userDetailObj->userDetail($user->church_id);
+                    $user->referral_id = $userChurch->referral_id;
+                }
+                $jsonResponse =  General::jsonResponse(1,$message,$user,'',$token,'form');
+            }
+            else{
+                $message = 'Password does not match.';
+                $jsonResponse =  General::jsonResponse(3,$message,'','','','form');
+            }
+        }else{
+            $message = 'User not found.';
+            $jsonResponse =  General::jsonResponse(0,$message);
+        }
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine church, donor, pastor registration based on user roles.
+     *
+     * @param  \App\Http\Requests\RegisterApiRequest  $request
+     * @return Response
+     */
+    public function registration(RegisterApiRequest $request ){
+        $userDetailObj  = new \App\User;
+        $input = $request->all();
+        $input['password'] = bcrypt($input['password']);
+        if($input['user_role_id'] != 3){
+            if(empty($input['referral_id'])|| $input['referral_id'] == ''){
+                $message = 'Church not found.';
+                $jsonResponse = General::jsonResponse(1,$message,'','','','form');
+                return $jsonResponse;
+            }
+            $userReferral = $userDetailObj->adminChurchReferral($input['referral_id']);
+            if(!$userReferral){
+                $message = 'Church not found.';
+                $jsonResponse = General::jsonResponse(1,$message,'','','','form');
+                return $jsonResponse;
+            }
+            $input['referral_id'] = '';
+            $input['church_id'] = $userReferral->id;
+
+            
+            if($request->has('image')){
+                $nameofimage = 'user_image';
+                $input['image'] = General::upload_file($input['image'], $nameofimage, "user_images");
+            }
+        }
+        else{
+            $input['referral_id'] = 'gtg'.mt_rand(10000, 99999).(int($userDetailObj->churchCount())+1).'church';
+            $input['image'] = General::upload_file($request->file('image'), "church_images", "user_images");
+        }
+        $user = $userDetailObj->create($input);
+        $userSettingDetailObj = new \App\UserSetting;
+        $userSetting= $userSettingDetailObj->create(['user_id'=>$user->id,'field_name'=>'NOTIFICATION_OF','field_value'=>'']);
+        $userSetting= $userSettingDetailObj->create(['user_id'=>$user->id,'field_name'=>'VIBRATION','field_value'=>'disable']);
+        $userSetting= $userSettingDetailObj->create(['user_id'=>$user->id,'field_name'=>'COLOURED_BLURED','field_value'=>'disable']); 
+
+        $userInfo = $userDetailObj->userDetail($user->id);
+        if($userInfo->user_role_id != 3){
+            $userChurch = $userDetailObj->userDetail($userInfo->church_id);
+            $userInfo->referral_id = $userChurch->referral_id;
+        }
+        $token = JWTAuth::fromUser($userInfo);
+        $message = 'Registration has been successfully done.';
+        $userInfo->image =  General::get_file_src($userInfo->image);
+        $jsonResponse =  General::jsonResponse(1,$message,$userInfo,'',$token,'form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine change password of user based on user id.
+     *
+     * @param  \App\Http\Requests\ChangePasswordRequest  $request
+     * @return Response
+     */
+    public function changePassword(ChangePasswordRequest $request ){
+        $userDetailObj = new \App\User;
+        $input = $request->all();
+        $user = $userDetailObj->userDetail($input['id']);
+        if($user){
+            if(Hash::check($input['old_password'], $user->password)){
+                $user->update(['password' => bcrypt($input['new_password'])]);
+                $message = 'Password has been changed successfully.';
+                $user->image =  General::get_file_src($user->image);
+                $jsonResponse =  General::jsonResponse(1,$message,$user,'','','form');
+            }
+            else{
+                $message = 'Password does not match.';
+                $jsonResponse =  General::jsonResponse(3,$message,'','','','form');
+            }
+        }
+        else{
+            $message = 'User not found.';
+            $jsonResponse =  General::jsonResponse(0,$message,'','','','form');
+        }
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine user profile to update based on user id.
+     *
+     * @param  \App\Http\Requests\UpdateProfileApiRequest  $request
+     * @return Response
+     */
+    public function userProfileUpdate(UpdateProfileApiRequest $request ){
+        $userDetailObj = new \App\User;
+        $input = $request->all();
+        $user = $userDetailObj->userDetail($input['id']);
+        if($user){
+            if($request->has('image')){
+                $nameofimage = 'user_image';
+                $input['image'] = General::upload_file($input['image'], $nameofimage, "user_images");
+            }
+            $user->update($input);
+            $message = 'Profile has been updated successfully.';
+            
+            $user->image =  General::get_file_src($user->image);
+
+            if($user->user_role_id != 3){
+                $userChurch = $userDetailObj->userDetail($user->church_id);
+                $user->referral_id = $userChurch->referral_id;
+            }
+            $jsonResponse =  General::jsonResponse(1,$message,$user,'','','form');
+        }
+        else{
+            $message = 'User not found.';
+            $jsonResponse =  General::jsonResponse(0,$message,'','','','form');
+        }
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine user profile to update based on user id.
+     *
+     * @param  \App\Http\Requests\UpdateSettingApiRequest  $request
+     * @return Response
+     */
+    public function userProfileSetting(UpdateSettingApiRequest $request ){
+        $userDetailObj = new \App\User;
+        $input = $request->all();
+        $user = $userDetailObj->userDetail($input['id']);
+        if($user){
+            $input['lastname'] = '';
+            $message = 'Profile has been updated successfully.';
+            $image = $user->image;
+            if($request->has('image')){
+                $nameofimage = 'user_image';
+                $input['image'] = General::upload_file($input['image'], $nameofimage, "user_images");
+                $image = $input['image'];
+            }
+            $user->update($input);
+            $user->image =  General::get_file_src($image);
+            $jsonResponse =  General::jsonResponse(1,$message,$user,'','','form');
+        }
+        else{
+            $message = 'User not found.';
+            $jsonResponse =  General::jsonResponse(0,$message,'','','','form');
+        }
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine logout on user id.
+     *
+     * @param  \App\Http\Requests\UserIdApiRequest  $request
+     * @return Response
+     */
+    public static function logout(UserIdApiRequest $request){
+        $userDetailObj = new \App\User;
+        $input = $request->all();
+        $user = $userDetailObj->userDetail($input['id']);
+        $user->update(['device_token'=>'']);
+        $message = 'Successfully logout.';
+        $user->image =  General::get_file_src($user->image);
+        $jsonResponse =  General::jsonResponse(1,$message,$user,'','','form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine function to delete notification of users.
+     *
+     * @param  \App\Http\Requests\ChurchDetailApiRequest  $request
+     * @return Response
+     */
+    public static function projectList(ChurchDetailApiRequest $request){
+        $projectDetailObj = new \App\Project;
+        $input = $request->all();
+        if($request->has('page'))
+            $page = $input['page'];
+        else
+            $page = 1;
+
+        $perpage = 10;
+        $calc  = $perpage * $page;
+        $start = $calc - $perpage;
+
+        $project = $projectDetailObj->projectListDonation($start,$input['church_id']);
+        $next = "false";
+        $projectListing = array();
+        $message = "No data found";
+        $projectCount = json_decode(json_encode($project), true);
+        $projectPaymentDonationDetail = new \App\ProjectDonationPayment;
+        // print_r($project->project_images);exit;
+        if(!empty($projectCount)){
+            
+            $message = 'Project List.';
+            // $user->image =  General::get_file_src($user->image);
+            foreach($project as $key => $value){
+                foreach($value->project_images as $key => $val){
+                    $val->image =  General::get_file_src($val->image);
+                }
+            }
+            if($project->count()>10){
+                $next = "true";
+                foreach($project as $key =>$value){
+                    $value->total_amount = $projectPaymentDonationDetail->totalFundCollection($value->id);
+                    $value->total_donor = $projectPaymentDonationDetail->projectDonationPayementCount($value->id);
+                    if($value->qrcode != '')
+                        $value->generated_qrcode = base64_encode(QrCode::format('png')->size(300)->generate($value->qrcode));
+                    else
+                        $value->generated_qrcode = '';
+                    $projectListing[] = json_decode(json_encode($value), true);
+                   
+                }
+                // $userListing = json_decode(json_encode($user), true);
+                array_pop($projectListing);
+            }
+            else{
+                foreach($project as $key =>$value){
+                    $value->total_amount = $projectPaymentDonationDetail->totalFundCollection($value->id);
+                    $value->total_donor = $projectPaymentDonationDetail->projectDonationPayementCount($value->id);
+                    if($value->qrcode != '')
+                        $value->generated_qrcode = base64_encode(QrCode::format('png')->size(300)->generate($value->qrcode));
+                    else
+                        $value->generated_qrcode = '';
+                    $projectListing[] = json_decode(json_encode($value), true);
+                }
+                
+                $next = "false";
+            }
+            $jsonResponse = General::jsonResponse(1,$message,$projectListing,$next,'','form');
+            return $jsonResponse;
+        }
+        $jsonResponse = General::jsonResponse(0,$message,$projectListing,$next,'','form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine project detail.
+     *
+     * @param  \App\Http\Requests\ProjectDetailApiRequest  $request
+     * @return Response
+     */
+    public static function projectDetail(ProjectDetailApiRequest $request){
+        $projectDetailObj = new \App\Project;
+        $input = $request->all();
+        $project = $projectDetailObj->project_detail($input['project_id']);
+        $message = 'Project Detail.';
+        $jsonResponse = General::jsonResponse(1,$message,$project,'','','form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine qr code verification.
+     *
+     * @param  \App\Http\Requests\QrCodeVerificationApiRequest  $request
+     * @return Response
+     */
+    public static function qrCodeVerification(QrCodeVerificationApiRequest $request){
+        $projectDetailObj = new \App\Project;
+        $input = $request->all();
+        $project = $projectDetailObj->project_detail($input['project_id']);
+        
+        if($project->qr_code == $input['qr_code']){ 
+            $message = 'QR code verified.';
+            $data = (object)array('status'=>true);
+        }
+        else{
+            $message = 'QR code is not verified.';
+            $data = (object)array('status'=>false);
+        }
+        
+        $jsonResponse = General::jsonResponse(1,$message,$data);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine user detail request on user.
+     *
+     * @param  \App\Http\Requests\UserIdApiRequest  $request
+     * @return Response
+     */
+    public static function userDetailWithSetting(UserIdApiRequest $request){
+        $projectDetailObj = new \App\User;
+        $input = $request->all();
+        $project = $projectDetailObj->userDetail($input['user_id']);
+        $message = 'User Detail.';
+        $jsonResponse = General::jsonResponse(1,$message,$project,'','','form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine church list based on search church name and referral id.
+     *
+     * @param  \App\Http\Requests\Request  $request
+     * @return Response
+     */
+    public static function churchListWithSearch(Request $request){
+        $projectDetailObj = new \App\User;
+        $input = $request->all();
+        if($request->has('text'))
+            $text = $input['text'];
+        else
+            $text = '';
+
+        if($request->has('page'))
+            $page = $input['page'];
+        else
+            $page = 1;
+
+        $perpage = 10;
+        $calc  = $perpage * $page;
+        $start = $calc - $perpage;
+        
+        if($request->has('referral_id'))
+            $referral_id = $input['referral_id'];
+        else
+            $referral_id = '';    
+
+        if($text == '' && $referral_id == '')
+            $project = $projectDetailObj->churchList($start);
+        else
+            $project = $projectDetailObj->churchList($start,$text,$referral_id);
+
+        if($project){
+            $message = 'Church Detail.';
+            if(count($project)>10){
+                $next = "true";
+                array_pop($project);
+            }
+            else{
+                $next = "false";
+            }
+
+            $churchListing = array();
+            foreach($project as $key=>$value){
+                $value->image =  General::get_file_src($value->image); 
+                $churchListing[] = array('referral_id'=>$value->referral_id,
+                'firstname'=>$value->firstname,'lastname'=>$value->lastname,'image'=>$value->image); 
+            }
+
+            $jsonResponse = General::jsonResponse(1,$message,$churchListing,$next,'','form');
+            return $jsonResponse;
+        }
+        else{
+            $message = 'Church not found.';
+            $jsonResponse = General::jsonResponse(0,$message,'','','','form');
+            return $jsonResponse;
+        }
+    }
+
+    /**
+     * Determine function to update scripture.
+     *
+     * @param  \App\Http\Requests\ScriptureEditApiRequest  $request
+     * @return Response
+     */
+    public static function editScripture(ScriptureEditApiRequest $request){
+        $userDetailObj = new \App\User;
+        $input = $request->all();
+        $user = $userDetailObj->userDetail($input['id']);
+        $edit_scripture = $user->update(['scripture'=>$input['scripture']]);
+        $message = 'Scripture has been updated successfully.';
+        $jsonResponse = General::jsonResponse(1,$message,'','','','form');
+        return $jsonResponse;
+    }
+    
+    /**
+     * Determine function to update scripture.
+     *
+     * @param  \App\Http\Requests\ShowScriptureApiRequest  $request
+     * @return Response
+     */
+    public static function showScripture(ShowScriptureApiRequest $request){
+        $userDetailObj = new \App\User;
+        $input = $request->all();
+        $user = $userDetailObj->userDetail($input['church_id']);
+        $message = 'Church Scripture.';
+        $user->image =  General::get_file_src($user->image);
+        $jsonResponse = General::jsonResponse(1,$message,$user,'','','form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine function to show user list.
+     *
+     * @param  \App\Http\Requests\UserListApiRequest  $request
+     * @return Response
+     */
+    public static function userList(UserListApiRequest $request){
+        $userDetailObj = new \App\User;
+        $input = $request->all();
+        if($request->has('page'))
+            $page = $input['page'];
+        else
+            $page = 1;
+
+        $perpage = 10;
+        $calc  = $perpage * $page;
+        $start = $calc - $perpage;
+        
+        $user = $userDetailObj->userListPagination($start,$input['church_id'],$input['user_role_id']);
+        $next = "false";
+        $userListing = array();
+        $message = "No data found";
+        $usercount = json_decode(json_encode($user), true);
+
+        // print_r($usercount);exit;
+        if(!empty($usercount)){
+            if($input['user_role_id'] == 2)
+                $message = 'Donor list.';
+            else
+                $message = 'Pastor list.';
+            $message = 'User List.';
+            // $user->image =  General::get_file_src($user->image);
+            
+            if($user->count()>10){
+                $next = "true";
+                foreach($user as $key =>$value){
+                    $value->image =  General::get_file_src($value->image);
+                    $userListing[] = json_decode(json_encode($value), true);
+                }
+                // $userListing = json_decode(json_encode($user), true);
+                array_pop($userListing);
+            }
+            else{
+                foreach($user as $key =>$value){
+                    $value->image =  General::get_file_src($value->image);
+                    $userListing[] = json_decode(json_encode($value), true);
+                }
+                
+                $next = "false";
+            }
+            $jsonResponse = General::jsonResponse(1,$message,$userListing,$next,'','form');
+            return $jsonResponse;
+        }
+        $jsonResponse = General::jsonResponse(0,$message,$userListing,$next,'','form');
+        return $jsonResponse;
+        
+        // $jsonResponse = General::jsonResponse(1,$message,$user);
+        // return $jsonResponse;
+    }
+
+    /**
+     * Determine function to add user.
+     *
+     * @param  \App\Http\Requests\AddUserRequest  $request
+     * @return Response
+     */
+    public function addUser(AddUserRequest $request ){
+        $userDetailObj  = new \App\User;
+        $input = $request->all(); 
+        $input['password'] = bcrypt($input['password']);
+        $nameofimage = 'user_image';
+        if($input['mobile'] == '11111111111'){
+            $input['mobile'] = '';
+        }
+        $input['image'] = General::upload_file($input['image'], $nameofimage, "user_images");
+        $user = $userDetailObj->create($input); 
+        
+        
+        $userSettingDetailObj = new \App\UserSetting;
+        $userSetting= $userSettingDetailObj->create(['user_id'=>$user->id,'field_name'=>'NOTIFICATION_OF','field_value'=>'']);
+        $userSetting= $userSettingDetailObj->create(['user_id'=>$user->id,'field_name'=>'VIBRATION','field_value'=>'disable']);
+        $userSetting= $userSettingDetailObj->create(['user_id'=>$user->id,'field_name'=>'COLOURED_BLURED','field_value'=>'disable']);
+        $userInfo = $userDetailObj->userDetail($user->id);
+        $userInfo->image =  General::get_file_src($userInfo->image);
+        if($userInfo->user_role_id == 2)
+            $message = 'Donor has been added successfully.';
+        else
+            $message = 'Pastor has been added successfully.';
+        $jsonResponse =  General::jsonResponse(1,$message,$userInfo);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine function to update user.
+     *
+     * @param  \App\Http\Requests\EditUserApiRequest  $request
+     * @return Response
+     */
+    public function editUser(EditUserApiRequest $request ){
+        $userDetailObj  = new \App\User;
+        $input = $request->all();
+        $user  = $userDetailObj->userDetail($input['id']);
+        if($input['mobile'] == '11111111111'){
+            $input['mobile'] = '';
+        }
+        if($request->has('image')){
+            $nameofimage = 'user_image';
+            $input['image'] = General::upload_file($input['image'], $nameofimage, "user_images");
+        }
+        $user->update($input);
+        $user  = $userDetailObj->userDetail($input['id']);
+        $user->image =  General::get_file_src($user->image);
+        
+        if($user->user_role_id == 2)
+            $message = 'Donor has been updated successfully.';
+        else
+            $message = 'Pastor has been updated successfully.';
+        $jsonResponse =  General::jsonResponse(1,$message,$user);
+        return $jsonResponse;
+    }
+
+    public function editUserSetting(Request $request ){
+        $userSettingDetailObj  = new \App\UserSetting;
+        $input = $request->all();
+        
+        // $userSettingValue = array('notification_of','vibration','coloured_blured');
+        // foreach($userSettingValue as $value){
+            // if($value == $input['notification_of']){
+                $userUpdateSetting = $userSettingDetailObj->userSetting($input['user_id'],'NOTIFICATION_OF');
+                $userUpdateSetting->update(['field_value'=>$input['notification_of']]);
+            // }
+            // if($value == $input['vibration']){
+                $userUpdateSetting = $userSettingDetailObj->userSetting($input['user_id'],'VIBRATION');
+                $userUpdateSetting->update(['field_value'=>$input['vibration']]);
+                $userUpdateSetting = $userSettingDetailObj->userSetting($input['user_id'],'COLOURED_BLURED');
+                $userUpdateSetting->update(['field_value'=>$input['coloured_blured']]);
+            // }
+        // }
+        $userSetting  = $userSettingDetailObj->userSettingList($input['user_id']);
+            $message = 'Donor has been updated successfully.';
+        $jsonResponse =  General::jsonResponse(1,$message,$userSetting);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine function to delete user.
+     *
+     * @param  \App\Http\Requests\UserIdApiRequest  $request
+     * @return Response
+     */
+    public function deleteUser(UserIdApiRequest $request ){
+        $userDetailObj  = new \App\User;
+        $input = $request->all();
+        $user = $userDetailObj->userDetail($input['user_id']);
+        $user->update(['is_deleted'=>'1']);
+        if($user->user_role_id == 2)
+            $message = 'Donor has been deleted successfully.';
+        else
+            $message = 'Pastor has been deleted successfully.';
+            
+        $jsonResponse =  General::jsonResponse(1,$message,(object)array());
+        return $jsonResponse;
+    }
+
+     /**
+     * Determine function to block user.
+     *
+     * @param  \App\Http\Requests\UserIdApiRequest  $request
+     * @return Response
+     */
+    public function blockUser(UserIdApiRequest $request ){
+        $userDetailObj  = new \App\User;
+        $input = $request->all();
+        $user = $userDetailObj->userDetail($input['user_id']);
+        $user->update(['status'=>$input['status']]);
+        if($input['status'] == 'active'){
+            if($user->user_role_id == 2)
+                $message = 'Donor has been activated successfully.';
+            else
+                $message = 'Pastor has been activated successfully.';
+        }
+        else{
+            if($user->user_role_id == 2)
+                $message = 'Donor has been blocked successfully.';
+            else
+                $message = 'Pastor has been blocked successfully.';
+        }
+        $jsonResponse =  General::jsonResponse(1,$message,(object)array());
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine add project.
+     *
+     * @param  \App\Http\Requests\AddProjectApiRequest  $request
+     * @return Response
+     */
+    public function addProject(AddProjectApiRequest $request ){
+        $projectDetailObj  = new \App\Project;
+        $input = $request->all();
+        $input['qrcode'] = mt_rand(1000000, 9999999);
+        
+        $project = $projectDetailObj->create($input);
+        $explode_name = explode(' ',$project->name);
+        $qrcode = mt_rand(1000000, 9999999).$explode_name[0].$project->id;
+        $project_detail = $projectDetailObj->project_detail($project->id);
+        $project_detail->update(['qrcode' => $qrcode]);
+        $project->qrcode = $qrcode;
+        $projectslabDetailObj = new \App\ProjectDonationSlab;
+        $projectImageDetailObj = new \App\ProjectImage;
+        if($input['images']){
+            $i = 0;
+            foreach ($input['images'] as $key => $value) {
+                $i++;
+                $nameofimage = 'project_image'.'_'.$i;
+                $image['image'] = General::upload_file($value, $nameofimage, "user_images");
+                $image['project_id'] = $project->id;
+                $projectImageDetailObj->create($image);
+            }
+        }
+        if($input['donation_slab']){
+            $i = 0;
+            $donationSlab = json_decode($input['donation_slab'], true);
+            foreach ($donationSlab as $key => $value) {
+                $i++;
+                $project_slab['project_id'] = $project->id;
+                $project_slab['amount'] = $value;
+                $projectslabDetailObj->create($project_slab);
+            }
+        }
+        $message = 'Project has been added successfully.';
+        $jsonResponse =  General::jsonResponse(1,$message,$project);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine update project.
+     *
+     * @param  \App\Http\Requests\EditProjectApiRequest  $request
+     * @return Response
+     */
+    public function editProject(EditProjectApiRequest $request ){
+        $projectDetailObj  = new \App\Project;
+        $input = $request->all();
+        $project = $projectDetailObj->project_detail($input['project_id']);
+        $project->update($input);
+        $projectslabDetailObj = new \App\ProjectDonationSlab;
+        $projectImageDetailObj = new \App\ProjectImage;
+        // print_r($project);exit;
+        if($input['images']){
+            $i = 0;
+            $projectImage = $projectImageDetailObj->projectImages($input['project_id']);
+            foreach($projectImage as $key => $val){
+                $projectImageDelete = $projectImageDetailObj->find($val->id);
+                if($projectImageDelete)
+                    $projectImageDelete->delete();
+            }
+            foreach ($input['images'] as $key => $value) {
+                $i++;
+                $nameofimage = 'project_image'.'_'.$i;
+                $image['image'] = General::upload_file($value, $nameofimage, "user_images");
+                $image['project_id'] = $project->id;
+                $projectImageDetailObj->create($image);
+            }
+        }
+        if($input['donation_slab']){
+            $i = 0;
+            $projectSlab = $projectslabDetailObj->donation_slab($input['project_id']);
+            foreach($projectSlab as $key => $val){
+                $projectSlabDelete = $projectslabDetailObj->find($val->id);
+                if($projectSlabDelete)
+                    $projectSlabDelete->delete();
+            }
+            $donationSlab = json_decode($input['donation_slab'], true);
+            foreach ($donationSlab as $key => $value) {
+                $i++;
+                
+                $project_slab['project_id'] = $project->id;
+                $project_slab['amount'] = $value;
+                $projectslabDetailObj->create($project_slab);
+            }
+        }
+        $project = $projectDetailObj->project_detail($input['project_id']);
+
+        $message = 'Project has been updated successfully.';
+        $jsonResponse =  General::jsonResponse(1,$message,$project);
+        return $jsonResponse;
+    }
+
+    
+    /**
+     * Determine update project.
+     *
+     * @param  \App\Http\Requests\ProjectDetailApiRequest  $request
+     * @return Response
+     */
+    public function deleteProject(ProjectDetailApiRequest $request ){
+        $projectDetailObj  = new \App\Project;
+        $input = $request->all();
+        $project = $projectDetailObj->project_detail($input['project_id']);
+        $project->update(['is_deleted'=>'1']);
+        $donationslabDetailObj = new \App\ProjectDonationSlab;
+        $donationSlab = $donationslabDetailObj->donation_slab($project->id);
+        if($donationSlab)
+            foreach($donationSlab as $donation)
+                $donation->update(['is_deleted' => '1']);
+        $projectImageDetailObj = new \App\ProjectImage;
+        $projectImage = $projectImageDetailObj->projectImages($project->id);
+        if($projectImage)
+            foreach($projectImage as $imageloop)
+                $imageloop->update(['is_deleted' => '1']);
+
+        $projectDonationPaymentDetailObj = new \App\ProjectDonationPayment;
+        $projectDonationPaymentList = $projectDonationPaymentDetailObj->projectDonationPayementList($project->id);
+        if($projectDonationPaymentList)
+            foreach($projectDonationPaymentList as $key => $val1){
+                $projectDonationPaymentDetail = $projectDonationPaymentDetailObj->find($val1->id);
+                $projectDonationPaymentDetail->update(['is_deleted' => '1']);
+            }
+        $message = 'Project has been deleted successfully.';
+        $jsonResponse =  General::jsonResponse(1,$message,$project);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine fundname list.
+     *
+     * @param  \App\Http\Requests\FundNameListApiRequest  $request
+     * @return Response
+     */
+    public function fundNameList(FundNameListApiRequest $request ){
+        $fundDetailObj  = new \App\ChurchFund;
+        $input = $request->all();
+        if($request->has('page'))
+            $page = $input['page'];
+        else
+            $page = 0;
+
+        $perpage = 10;
+        $calc  = $perpage * $page;
+        $start = $calc - $perpage;
+        
+        $fund_list = $fundDetailObj->churchFundDetailPagination($start,$input['church_id']);
+        // $user = $userDetailObj->userListPagination($start,$input['church_id'],$input['user_role_id']);
+        $next = "false";
+        $fundNameListing = array();
+        $message = "No data found";
+        $fundCount = json_decode(json_encode($fund_list), true);
+        if($page == '0'){
+            $message = 'Fund Name List.';
+            $fundNameListing = json_decode(json_encode($fund_list), true);
+            $jsonResponse = General::jsonResponse(1,$message,$fundNameListing,$next,'','form');
+            return $jsonResponse;
+        }
+        if(!empty($fundCount)){
+            $message = 'Fund Name List.';
+            if($fund_list->count()>10){
+                $next = "true";
+                $fundNameListing = json_decode(json_encode($fund_list), true);
+                array_pop($fundNameListing);
+            }
+            else{
+                $fundNameListing = json_decode(json_encode($fund_list), true);
+                $next = "false";
+            }
+        $jsonResponse = General::jsonResponse(1,$message,$fundNameListing,$next,'','form');
+        return $jsonResponse;
+        }
+        $jsonResponse = General::jsonResponse(0,$message,$fundNameListing,$next,'','form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine add fundname.
+     *
+     * @param  \App\Http\Requests\AddFundApiRequest  $request
+     * @return Response
+     */
+    public function addFundName(AddFundApiRequest $request ){
+        $fundDetailObj  = new \App\ChurchFund;
+        $input = $request->all();
+        $fund_list = $fundDetailObj->create($input);
+        $message = 'Fund has been created successfully.';
+        $jsonResponse =  General::jsonResponse(1,$message,$fund_list);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine update fundname.
+     *
+     * @param  \App\Http\Requests\EditFundApiRequest  $request
+     * @return Response
+     */
+    public function updateFundName(EditFundApiRequest $request ){
+        $fundDetailObj  = new \App\ChurchFund;
+        $input = $request->all();
+        $fund_list = $fundDetailObj->single_fund_detail($input['id']);
+        $fund_edit = $fund_list->update($input);
+        $fund_list = $fundDetailObj->single_fund_detail($input['id']);
+        
+        $message = 'Fund has been updated successfully.';
+        $jsonResponse =  General::jsonResponse(1,$message,$fund_list);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine update fundname.
+     *
+     * @param  \App\Http\Requests\DeleteFundApiRequest  $request
+     * @return Response
+     */
+    public function deleteFundName(DeleteFundApiRequest $request ){
+        $fundNameDetailObj  = new \App\ChurchFund;
+        $input = $request->all();
+        $fundname = $fundNameDetailObj->single_fund_detail($input['id']);
+        if($fundname){
+            $fundname->update(['is_deleted'=>'1']); 
+            $message = 'Fund name has been deleted successfully.';
+            $status = 1;
+        }
+        else{
+            $fundname = (object)array();
+            $message = 'Fund name is not found.';
+            $status = 0;
+        }
+        $jsonResponse =  General::jsonResponse($status,$message,$fundname);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine function to show upcoming event lists.
+     *
+     * @param  \App\Http\Requests\NextEventListApiRequest  $request
+     * @return Response
+     */
+    public function nextEventList(NextEventListApiRequest $request ){
+        $eventDetailObj  = new \App\Event;
+        $input = $request->all();
+        $event = $eventDetailObj->event_detail_datewise($input['church_id'],$input['date']);
+        $message = "Event list.";
+        $jsonResponse =  General::jsonResponse(1,$message,$event);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine function to show upcoming event lists.
+     *
+     * @param  \App\Http\Requests\Request  $request
+     * @return Response
+     */
+    public function dateEventList(Request $request ){
+        $eventDetailObj  = new \App\Event;
+        $input = $request->all();
+        if($request->has('start_date')){
+            $start_date = $input['start_date'];
+            $inStartDate = explode(' ',$start_date);
+            $start_date = $inStartDate[0];
+        }
+        else
+            $start_date = '';
+        
+        if($request->has('end_date')){
+            $end_date = $input['end_date'];
+            $inEndDate = explode(' ',$end_date);
+            $end_date = $inEndDate[0];
+        }
+        else
+            $end_date = '';
+        $event = $eventDetailObj->eventDateList($input['church_id'],$start_date,$end_date);
+        if($event){
+            
+            $message = "Event date list.";
+            $jsonResponse =  General::jsonResponse(1,$message,$event,'','','form');
+            return $jsonResponse;
+        }
+        else{
+            $message = "No data found.";
+            $jsonResponse =  General::jsonResponse(0,$message,'','','','form');
+            return $jsonResponse;
+        }
+    }
+    /**
+     * Determine function to show upcoming events.
+     *
+     * @param  \App\Http\Requests\NextEventApiRequest  $request
+     * @return Response
+     */
+    public function nextEvent(NextEventApiRequest $request ){
+        $eventDetailObj  = new \App\Event;
+        $input = $request->all();
+        if($request->has('date')){
+            $date = $input['date'];
+            $inDate = explode(' ',$date);
+            $date = $inDate[0];
+        }
+        else
+            $date = '';
+
+        
+        $event = $eventDetailObj->next_event_detail($input['church_id'],$date);
+        $message = "Event list.";
+        $jsonResponse =  General::jsonResponse(1,$message,$event,'','','form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine add event of church.
+     *
+     * @param  \App\Http\Requests\AddEventApiRequest  $request
+     * @return Response
+     */
+    public function addEvent(AddEventApiRequest $request ){
+        $eventDetailObj  = new \App\Event;
+        $input = $request->all();
+        $event = $eventDetailObj->create($input);
+        $message = "Event has been added successfully.";
+        $jsonResponse =  General::jsonResponse(1,$message,$event);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine add event of church.
+     *
+     * @param  \App\Http\Requests\AddEventApiRequest  $request
+     * @return Response
+     */
+    public function updateEvent(AddEventApiRequest $request ){
+        $eventDetailObj  = new \App\Event;
+        $input = $request->all();
+        $event = $eventDetailObj->event_detail($input['id']);
+        $event->update($input);
+        $event = $eventDetailObj->event_detail($input['id']);
+        $message = "Event has been updated successfully.";
+        $jsonResponse =  General::jsonResponse(1,$message,$event);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine add event of church.
+     *
+     * @param  \App\Http\Requests\DeleteEventApiRequest  $request
+     * @return Response
+     */
+    public function deleteEvent(DeleteEventApiRequest $request ){
+        $eventDetailObj  = new \App\Event;
+        $input = $request->all();
+        $event = $eventDetailObj->event_detail($input['id']);
+        if($event){
+            $event->update(['is_deleted'=>'1']); 
+            $message = 'Event has been deleted successfully.';
+            $status = 1;
+        }
+        else{
+            $event = (object)array();
+            $message = 'Event is not found.';
+            $status = 0;
+        }
+        $jsonResponse =  General::jsonResponse($status,$message,$event);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine add task to user.
+     *
+     * @param  \App\Http\Requests\AddTaskApiRequest  $request
+     * @return Response
+     */
+    public function addTask(AddTaskApiRequest $request ){
+        $taskDetailObj  = new \App\Task;
+        $input = $request->all();
+        $task = $taskDetailObj->create($input);
+        $message = "Task has been added successfully.";
+        $jsonResponse =  General::jsonResponse(1,$message,$task,'','','form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine update task to user.
+     *
+     * @param  \App\Http\Requests\EditTaskApiRequest  $request
+     * @return Response
+     */
+    public function updateTask(EditTaskApiRequest $request ){
+        $taskDetailObj  = new \App\Task;
+        $input = $request->all();
+        $task = $taskDetailObj->task_detail($input['id']);
+        $task->update($input);
+        $message = "Task has been updated successfully.";
+        $jsonResponse =  General::jsonResponse(1,$message,$task,'','','form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine delete task to user.
+     *
+     * @param  \App\Http\Requests\DeleteTaskApiRequest  $request
+     * @return Response
+     */
+    public function deleteTask(DeleteTaskApiRequest $request ){
+        $taskDetailObj  = new \App\Task;
+        $input = $request->all();
+        $task = $taskDetailObj->task_detail($input['id']);
+        if($task){
+            $task->update(['is_deleted'=>'1']); 
+            $message = 'Task has been deleted successfully.';
+            $status = 1;
+        }
+        else{
+            $task = (object)array();
+            $message = 'Task is not found.';
+            $status = 0;
+        }
+        $jsonResponse =  General::jsonResponse($status,$message,$task);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine task list of user.
+     *
+     * @param  \App\Http\Requests\UserIdApiRequest  $request
+     * @return Response
+     */
+    public static function taskList(UserIdApiRequest $request){
+        $taskDetailObj = new \App\Task;
+        $input = $request->all();
+        $task = $taskDetailObj->task_list($input['user_id']);
+        $message = 'Task Listing.';
+        $jsonResponse =  General::jsonResponse(1,$message,$task,'','','form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Calculating total fund of project related church.
+     *
+     * @param  \App\Http\Requests\ProjectDetailApiRequest  $request
+     * @return Response
+     */
+    public static function totalFundCollected(ProjectDetailApiRequest $request){
+        $fundDetailObj = new \App\ProjectDonationPayment;
+        $input = $request->all();
+        $fund = $fundDetailObj->total_fund_collection($input['project_id']);
+        $message = 'Total fund collected.';
+        $jsonResponse =  General::jsonResponse(1,$message,$fund,'','','form');
+        
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine donation slabs to Project donation.
+     *
+     * @param  \App\Http\Requests\ProjectDonationslabsApiRequest  $request
+     * @return Response
+     */
+    public static function donationSlabsList(ProjectDonationslabsApiRequest $request){
+        $donationDetailObj = new \App\ProjectDonationSlab;
+        $input = $request->all();
+        $donation = $donationDetailObj->donation_slab($input['project_id']);
+        $message = 'Donation list.';
+        $jsonResponse =  General::jsonResponse(1,$message,$donation,'','','form');
+        return $jsonResponse;
+    }
+
+    public static function notificationList(Request $request){
+        $notificationDetailObj = new \App\UserNotification;
+        $input = $request->all();
+        if($request->has('page'))
+            $page = $input['page'];
+        else
+            $page = 1;
+
+        $perpage = 10;
+        $calc  = $perpage * $page;
+        $start = $calc - $perpage;  
+
+        $notification = $notificationDetailObj->notification_list($start,$input['user_id']);
+        if(count($notification)>10){
+            $next = "true";
+            array_pop($notification);
+        }
+        else{
+            $next = "false";
+        }
+        $message = 'Notification list.';
+        $jsonResponse =  General::jsonResponse(1,$message,$notification,$next,'','form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine function to delete notification of users.
+     *
+     * @param  \App\Http\Requests\DeleteNotificationApiRequest  $request
+     * @return Response
+     */
+    public static function deleteNotification(DeleteNotificationApiRequest $request){
+        $notificationDetailObj = new \App\UserNotification;
+        $input = $request->all();
+        $notification = $notificationDetailObj->notification_detail($input['id']);
+        if($notification){
+            $notification->delete();
+            $message = 'Notification has been deleted successfully.';
+        }
+        else{
+            $notification = (object)array();
+            $message = "Notification is not available";
+        }
+        $jsonResponse =  General::jsonResponse(1,$message,$notification,'','','form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine forget password based on user roles .
+     *
+     * @param  \App\Http\Requests  $request
+     * @return Response
+     */
+    public static function notificationOptionList(Request $request){
+        $notificationDetailObj = new \App\NotificationOption;
+        $notificationOption = $notificationDetailObj->notification_option_list();
+        $message = 'Notification option list.';
+        $jsonResponse =  General::jsonResponse(1,$message,$notificationOption);
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine forget password based on user roles .
+     *
+     * @param  \App\Http\Requests\ForgetPasswordRequest  $request
+     * @return Response
+     */
+    public static function forgetPassword(ForgetPasswordRequest $request){
+        $userDetailObj = new \App\User;
+        $input = $request->all();
+        
+        $user = $userDetailObj->user_login_check_admin($input['email']);
+        if($user){
+            $user->image =  General::get_file_src($user->image);
+            $new_password = 'gtg'.mt_rand(100000, 999999);
+            $user->update(['password' => bcrypt($new_password)]);
+            $text = 'Hello ' . $user->firstname . ' ' . $user->lastname . ',';
+            $text .= '<br><br> Your login password is : ' . $new_password;
+            $text .= '<p>We advise that you change your password immediately for security purposes.</p>'; 
+            Mail::send([], [], function($message) use ($user, $text) {
+                $message->subject('Good to Give Password Reset Request');
+                $message->from('admin@yopmail.com', 'GTG');
+                $message->to($user->email);
+                $message->setBody($text, 'text/html');
+                echo "Thanks! Your request has been sent to " . $user->email;
+            });
+            $message = 'Password has been sent in your email address.';
+        }
+        else{
+            $user = (object)array();
+            $message = "Email address does not exist.";
+            $jsonResponse =  General::jsonResponse(2,$message,$user,'','','form');
+            return $jsonResponse;
+        }
+        $jsonResponse =  General::jsonResponse(1,$message,$user,'','','form');
+        
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine forget password based on user roles .
+     *
+     * @param  \App\Http\Requests\Request  $request
+     * @return Response
+     */
+    public static function taskPriority(Request $request){
+        $taskPriorityDetailObj = new \App\TaskPriority;
+        
+        $taskPriority = $taskPriorityDetailObj->all();
+        $message = 'Task Priority List.';
+        $jsonResponse =  General::jsonResponse(1,$message,$taskPriority,'','','form');
+        return $jsonResponse;
+    }
+
+    /**
+     * Determine church dashboard .
+     *
+     * @param  \App\Http\Requests\Request  $request
+     * @return Response
+     */
+    public static function churchDashboard(Request $request){        
+        $input = $request->all();        
+        $dashboardDetail = array();
+        $userDetailObj = new \App\User;
+        $globalSettingDetailObj = new \App\SiteGeneralSetting;
+        $globalSetting = $globalSettingDetailObj->SiteGeneralSetting('member');
+        $extraDetail = array();
+        if($globalSetting->option_value != '' && $globalSetting->option_value != 'disable'){
+            $user = $userDetailObj->userListDashboard($input['church_id']);
+            $usercount = json_decode(json_encode($user), true);
+            $extraDetail[] = array('widget_name'=>'Members','widget_value'=>count($usercount));
+        }
+        $globalSetting = $globalSettingDetailObj->SiteGeneralSetting('total_project');
+        if($globalSetting->option_value != '' && $globalSetting->option_value != 'disable'){
+            $projectDetailObj = new \App\Project;
+            $project = $projectDetailObj->project_list($input['church_id']);
+            $projectcount = json_decode(json_encode($project), true);
+            $extraDetail[] = array('widget_name'=>'Total Projects','widget_value'=>count($projectcount));
+        }
+        $dashboardDetail['widget'] = $extraDetail;
+
+        $userNotificationDetailObj = new \App\UserNotification;
+        $userNotification = $userNotificationDetailObj->notificationDetailUser($input['church_id']);
+        $dashboardDetail['notifications'] = $userNotification;
+        
+        $eventDetailObj = new \App\Event;
+        $event = $eventDetailObj->upcoming_event($input['church_id'],date('Y-m-d'));
+        $dashboardDetail['next_event'] = $event;
+        
+        $projectDonationPaymentDetailObj = new \App\ProjectDonationPayment;
+        $projectDonationPayment = $projectDonationPaymentDetailObj->fundAmount($input['church_id']);
+        // $projectDonationCount = json_decode(json_encode($projectDonationPayment), true);
+        $dashboardDetail['total_donation'] = $projectDonationPayment;
+
+        $taskDetailObj = new \App\Task;
+        $task = $taskDetailObj->taskListUpcoming($input['church_id']);
+
+        foreach($task as $key=>$value){
+            $date = explode(' ',$value->date);
+            //echo ''.date('Y-m-d',strtotime($date[0])).' ==='. date('Y-m-d');
+            if(date('Y-m-d',strtotime($date[0])) === date('Y-m-d'))
+                $dashboardDetail['tasks']['today'][]=$value;
+            else if(date('Y-m-d',strtotime($date[0])) === date('Y-m-d', strtotime(' +1 day')))
+                $dashboardDetail['tasks']['tomorrow'][]=$value;
+            else
+                $dashboardDetail['tasks']['upcoming'][]=$value;
+        }
+        // $dashboardDetail['tasks'] = $task;
+
+        $message = 'Church Dashboard.';
+        $jsonResponse =  General::jsonResponse(1,$message,$dashboardDetail,'','','form');
+        return $jsonResponse;
+    }
+
+    public static function donorDashboard(Request $request){        
+        $input = $request->all();        
+        $dashboardDetail = array();
+        $userDetailObj = new \App\User;
+        $user = $userDetailObj->find($input['id']);
+        $userNotificationDetailObj = new \App\UserNotification;
+        $userNotification = $userNotificationDetailObj->notificationDetailUser($input['id']);
+        if($userNotification)
+            $dashboardDetail['notifications'] = $userNotification;
+        else
+            $dashboardDetail['notifications'] = '';
+
+        
+        $eventDetailObj = new \App\Event;
+        $event = $eventDetailObj->upcoming_event($user->church_id,date('Y-m-d'));
+        $dashboardDetail['next_event'] = $event;
+        $churchScripture = $userDetailObj->userDetail($user->church_id);
+        $dashboardDetail['scripture'] = $churchScripture->scripture;
+
+        $message = 'User Dashboard.';
+        $jsonResponse =  General::jsonResponse(1,$message,$dashboardDetail,'','','form');
+        return $jsonResponse;
+    }
+}

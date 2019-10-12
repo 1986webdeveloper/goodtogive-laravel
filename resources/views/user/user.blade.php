@@ -1,0 +1,87 @@
+@extends('common.common')
+@extends('partial.sidebar')
+    @section('content')
+
+<div class="content-wrapper">
+            <div class="content-header row mb-1">
+                <div class="content-header-left col-md-6 col-12 mb-2 breadcrumb-new">
+                    <h3 class="content-header-title mb-0 d-inline-block">Users</h3>
+                    <div class="row breadcrumbs-top d-inline-block">
+                        <div class="breadcrumb-wrapper col-12">
+                            <ol class="breadcrumb">
+                                <li class="breadcrumb-item"><a href="{{ route('dashboard') }}">Dashboard</a>
+                                </li>
+                                <li class="breadcrumb-item active">Users
+                                </li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+                <div class="content-header-right col-md-6 col-12">
+                    <div class="btn-group float-md-right">
+                        <a class="btn btn-info" href="{{ route('user-add')}}">Add User</a>
+                    </div>
+                </div>
+            </div>
+            <div class="content-body">
+                <!-- `new` constructor table -->
+                <section id="constructor">
+                    <div class="row">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h4 class="card-title">Users</h4>
+                                    <a class="heading-elements-toggle"><i class="la la-ellipsis-v font-medium-3"></i></a>
+                                    <div class="heading-elements">
+                                        <ul class="list-inline mb-0">
+                                            <li><a data-action="collapse"><i class="ft-minus"></i></a></li>
+                                            <li><a data-action="expand"><i class="ft-maximize"></i></a></li>
+                                        </ul>
+                                    </div>
+                                </div>
+
+                                <div class="card-content collapse show">
+                                    <div class="card-body card-dashboard">
+                                        @if(Session::has('message'))
+                                            <div class="alert alert-success mb-2" role="alert">
+                                                {{ Session::get('message')}}    
+                                            </div>
+                                        @endif
+                                        <table data-ajax-url="{{ route('get-user-list') }}" class="table table-striped table-hover responsive table-bordered" id="editable-sample" data-order-type="DESC" data-order-cols="1">
+                                            <thead>
+                                                <tr>                                                
+                                                <th data-table-search="false" data-table-sort="true" data-name="DT_RowIndex" data-width="5">ID</th>
+                                                <th data-table-search="true" data-table-sort="true" data-name="user_photo" >User Photo</th>
+                                              
+                                                <th data-table-search="true" data-table-sort="true" data-name="user_name" id="user_name">User Name</th>
+                                                <!-- <th data-table-search="true" data-table-sort="true" data-name="user_role" >Role</th> -->
+                                                <th data-table-search="true" data-table-sort="true" data-name="email" >Email Address</th>
+                                                <th data-table-search="false" data-table-sort="true" data-name="mobile" >Mobile</th>
+                                                  <th data-table-search="true" data-table-sort="true" data-name="church_name" >Registered Church</th>
+                                                   <th data-table-search="true" data-table-sort="true" data-name="qrcode" > Download Qr Code</th>
+                                                  
+                                                <th data-table-search="false" data-table-sort="false" data-name="status" >status</th>
+                                                <th data-table-search="false" data-table-sort="false" data-name="action" >Action</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                <!-- `new` constructor table -->
+
+            </div>
+        </div>
+        </div> 
+      
+        
+
+
+    @endsection
+    
+    
